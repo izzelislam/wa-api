@@ -14,6 +14,22 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
+// Middleware whitelist IP
+const whitelistMiddleware = (req, res, next) => {
+  const allowedIps = process.env.ALLOWED_IPS ? process.env.ALLOWED_IPS.split(',') : [];
+  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+  if (allowedIps.includes(clientIp)) {
+    console.log(`IP ${clientIp} diizinkan mengakses`);
+    next();
+  } else {
+    console.log(`IP ${clientIp} ditolak aksesnya`);
+    res.status(403).send({ error: 'Forbidden: IP not allowed' });
+  }
+};
+
+app.use(whitelistMiddleware);
+
 // const db = mysql.createPool({
 //     connectionLimit: 10,
 //     host: process.env.DB_HOST,
