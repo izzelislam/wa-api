@@ -24,9 +24,13 @@ const whitelistMiddleware = (req, res, next) => {
     next();
   } else {
     console.log(`IP ${clientIp} ditolak aksesnya`);
-    res.status(403).send({ error: 'Forbidden: IP not allowed' });
+    res.status(403).send({ 
+      error: 'Forbidden: IP not allowed',
+      ip: clientIp
+    });
   }
 };
+
 
 app.use(whitelistMiddleware);
 
