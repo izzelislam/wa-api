@@ -58,11 +58,17 @@ app.use(express.json());
 let devices = {};
 let qrCodes = {};
 
+
 function deleteSession(deviceId) {
-  const sessionPath = path.join(__dirname, 'auth', deviceId);
   if (fs.existsSync(sessionPath)) {
-      rmSync(sessionPath, { recursive: true, force: true });
-      console.log(`Session for device ${deviceId} deleted`);
+      try {
+          fs.rmSync(sessionPath, { recursive: true, force: true });
+          console.log(`Session folder ${sessionPath} deleted`);
+      } catch (err) {
+          console.error('Error deleting session folder:', err);
+      }
+  } else {
+      console.log(`Session folder not found: ${sessionPath}`);
   }
 }
 
