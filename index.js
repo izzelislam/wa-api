@@ -56,55 +56,65 @@ app.use(express.json());
 // });
 
 let devices = {};
-let qrCodes = {}; // Simpan QR untuk tiap device
+let qrCodes = {};
+
+function deleteSession(deviceId) {
+  const sessionPath = path.join(__dirname, 'auth', deviceId);
+  if (fs.existsSync(sessionPath)) {
+      rmSync(sessionPath, { recursive: true, force: true });
+      console.log(`Session for device ${deviceId} deleted`);
+  }
+}
 
 async function connectDevice(deviceId) {
-    try {
-        const authFolder = path.join(__dirname, 'auth', deviceId);
-        if (!fs.existsSync(authFolder)) {
-        fs.mkdirSync(authFolder, { recursive: true });
-        }
+  try {
+      const authFolder = path.join(__dirname, 'auth', deviceId);
+      if (!fs.existsSync(authFolder)) {
+          fs.mkdirSync(authFolder, { recursive: true });
+      }
 
-        const { state, saveCreds } = await useMultiFileAuthState(authFolder);
-        const sock = makeWASocket({ auth: state });
-        devices[deviceId] = sock;
+      const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+      const sock = makeWASocket({ auth: state });
 
-        sock.ev.on('creds.update', saveCreds);
+      devices[deviceId] = sock;
 
-        sock.ev.on('connection.update', (update) => {
+      sock.ev.on('creds.update', saveCreds);
+
+      sock.ev.on('connection.update', (update) => {
           const { qr, connection, lastDisconnect } = update;
 
           if (qr) {
-              qrCodes[deviceId] = qr; // Simpan QR terbaru
+              qrCodes[deviceId] = qr;
           }
 
           if (connection === 'open') {
               console.log(`Device ${deviceId} connected`);
-              delete qrCodes[deviceId]; // Hapus QR setelah terhubung
+              delete qrCodes[deviceId];
           }
 
           if (connection === 'close') {
               console.log(`Device ${deviceId} disconnected`);
-              
               if (lastDisconnect?.error) {
-              console.error(`Connection Failure: ${lastDisconnect.error}`);
-              
-              if (lastDisconnect.error.output?.statusCode !== 401) {
-                  console.log(`Reconnecting device ${deviceId} in 5 seconds...`);
-                  setTimeout(() => connectDevice(deviceId), 5000);
-              } else {
-                  console.log(`Session expired for device ${deviceId}. Please scan QR again.`);
-              }
+                  const statusCode = lastDisconnect.error.output?.statusCode;
+                  console.error(`Connection Failure: ${lastDisconnect.error}`);
+
+                  if (statusCode === 401) {
+                      console.log(`Session expired for device ${deviceId}. Deleting session...`);
+                      deleteSession(deviceId);
+                  } else {
+                      console.log(`Reconnecting device ${deviceId} in 5 seconds...`);
+                      setTimeout(() => connectDevice(deviceId), 5000);
+                  }
               }
               delete devices[deviceId];
           }
-        });
+      });
 
-        return sock;
-    } catch (error) {
-        console.error(`Failed to connect device ${deviceId}:`, error);
-        return null;
-    }
+      return sock;
+  } catch (error) {
+      console.error(`Failed to connect device ${deviceId}:`, error);
+      return null;
+  }
 }
 
 // Auto-reconnect on server restart
@@ -123,33 +133,43 @@ autoReconnectDevices();
 
 // Generate QR code for a specific device
 app.get('/qr/:deviceId', async (req, res) => {
-    const { deviceId } = req.params;
+  const { deviceId } = req.params;
 
-    if (devices[deviceId]?.ws?.readyState === 1) {
-        return res.status(400).send({ error: 'Device already connected' });
-    }
+  try {
+      if (devices[deviceId]?.ws?.readyState === 1) {
+          return res.status(400).send({ error: 'Device already connected' });
+      }
 
-    try {
-        if (!devices[deviceId]) {
-        await connectDevice(deviceId);
-        }
+      if (!devices[deviceId]) {
+          await connectDevice(deviceId);
+      }
 
-        if (qrCodes[deviceId]) {
-        QRCode.toDataURL(qrCodes[deviceId], (err, url) => {
-            if (err) {
-            res.status(500).send('Error generating QR code');
-            } else {
-            res.send({ deviceId, qrCode: url });
-            }
-        });
-        } else {
-        res.status(404).send({ error: 'QR not available or already connected' });
-        }
-    } catch (error) {
-        console.error('Failed to initialize device:', error);
-        res.status(500).send({ error: 'Failed to initialize device', details: error.message });
-    }
+      let attempts = 0;
+      const maxAttempts = 30;
+
+      const waitForQR = setInterval(() => {
+          if (qrCodes[deviceId]) {
+              clearInterval(waitForQR);
+              QRCode.toDataURL(qrCodes[deviceId], (err, url) => {
+                  if (err) {
+                      res.status(500).send({ error: 'Error generating QR code' });
+                  } else {
+                      res.send({ status: true, message: 'QR generated', data: { deviceId, qrCode: url } });
+                  }
+              });
+          } else if (attempts >= maxAttempts) {
+              clearInterval(waitForQR);
+              res.status(404).send({ status: false, message: 'QR not available or already connected' });
+          }
+          attempts++;
+      }, 1000);
+
+  } catch (error) {
+      console.error('Failed to initialize device:', error);
+      res.status(500).send({ status: false, message: 'Kesalahan server internal', data: error.message });
+  }
 });
+
 
 // Send a message
 app.post('/send-message/:deviceId', async (req, res) => {
@@ -338,6 +358,38 @@ app.get('/getall/chat/:deviceId', async (req, res) => {
     res.send({ success: true, chats });
   } catch (error) {
     res.status(500).send({ error: 'Failed to fetch chats', details: error.message });
+  }
+});
+
+
+// disconnect
+app.get('/disconnect/:deviceId', (req, res) => {
+  const { deviceId } = req.params;
+
+  try {
+      if (devices[deviceId]) {
+          devices[deviceId].end(); // Tutup koneksi WebSocket
+          delete devices[deviceId]; // Hapus perangkat dari daftar koneksi
+          delete qrCodes[deviceId]; // Bersihkan QR jika ada
+          
+          console.log(`Device ${deviceId} disconnected and removed from memory.`);
+          return res.send({
+              status: true,
+              message: `Device ${deviceId} disconnected successfully`
+          });
+      } else {
+          return res.status(404).send({
+              status: false,
+              message: `Device ${deviceId} not found or already disconnected`
+          });
+      }
+  } catch (error) {
+      console.error(`Failed to disconnect device ${deviceId}:`, error);
+      return res.status(500).send({
+          status: false,
+          message: 'Internal server error',
+          error: error.message
+      });
   }
 });
 
