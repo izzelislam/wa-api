@@ -60,6 +60,7 @@ let qrCodes = {};
 
 
 function deleteSession(deviceId) {
+  const sessionPath = path.join(__dirname, 'auth', deviceId);
   if (fs.existsSync(sessionPath)) {
       try {
           fs.rmSync(sessionPath, { recursive: true, force: true });
@@ -369,35 +370,32 @@ app.get('/getall/chat/:deviceId', async (req, res) => {
 
 
 // disconnect
-app.get('/disconnect/:deviceId', (req, res) => {
+app.get('/disconnect/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
 
-  try {
-      if (devices[deviceId]) {
-          devices[deviceId].end(); // Tutup koneksi WebSocket
-          delete devices[deviceId]; // Hapus perangkat dari daftar koneksi
-          delete qrCodes[deviceId]; // Bersihkan QR jika ada
-          
-          console.log(`Device ${deviceId} disconnected and removed from memory.`);
-          return res.send({
-              status: true,
-              message: `Device ${deviceId} disconnected successfully`
-          });
+  if (devices[deviceId]) {
+      devices[deviceId].end();
+      delete devices[deviceId];
+
+      const sessionPath = path.join(__dirname, 'auth', deviceId);
+
+      if (fs.existsSync(sessionPath)) {
+          try {
+              fs.rmSync(sessionPath, { recursive: true, force: true });
+              console.log(`Session folder ${sessionPath} deleted`);
+              res.send({ success: true, message: `Device ${deviceId} disconnected and session deleted` });
+          } catch (err) {
+              console.error('Error deleting session folder:', err);
+              res.status(500).send({ error: 'Failed to delete session folder', details: err.message });
+          }
       } else {
-          return res.status(404).send({
-              status: false,
-              message: `Device ${deviceId} not found or already disconnected`
-          });
+          res.send({ success: true, message: `Device ${deviceId} disconnected, but session folder not found` });
       }
-  } catch (error) {
-      console.error(`Failed to disconnect device ${deviceId}:`, error);
-      return res.status(500).send({
-          status: false,
-          message: 'Internal server error',
-          error: error.message
-      });
+  } else {
+      res.status(400).send({ error: 'Device not connected' });
   }
 });
+
 
 app.listen(port, () => {
   console.log(`WhatsApp Gateway listening on port ${port}`);
