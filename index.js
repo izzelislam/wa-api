@@ -15,24 +15,24 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 
 // Middleware whitelist IP
-// const whitelistMiddleware = (req, res, next) => {
-//   const allowedIps = process.env.ALLOWED_IPS ? process.env.ALLOWED_IPS.split(',') : [];
-//   const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+const whitelistMiddleware = (req, res, next) => {
+  const allowedIps = process.env.ALLOWED_IPS ? process.env.ALLOWED_IPS.split(',') : [];
+  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
-//   if (allowedIps.includes(clientIp)) {
-//     console.log(`IP ${clientIp} diizinkan mengakses`);
-//     next();
-//   } else {
-//     console.log(`IP ${clientIp} ditolak aksesnya`);
-//     res.status(403).send({ 
-//       error: 'Forbidden: IP not allowed',
-//       ip: clientIp
-//     });
-//   }
-// };
+  if (allowedIps.includes(clientIp)) {
+    console.log(`IP ${clientIp} diizinkan mengakses`);
+    next();
+  } else {
+    console.log(`IP ${clientIp} ditolak aksesnya`);
+    res.status(403).send({ 
+      error: 'Forbidden: IP not allowed',
+      ip: clientIp
+    });
+  }
+};
 
 
-// app.use(whitelistMiddleware);
+app.use(whitelistMiddleware);
 
 // const db = mysql.createPool({
 //     connectionLimit: 10,
@@ -98,27 +98,35 @@ async function connectDevice(deviceId) {
           if (connection === 'open') {
               console.log(`Device ${deviceId} connected`);
               delete qrCodes[deviceId];
+              devices[deviceId].isConnected = true; // Tandai koneksi aktif
               devices[deviceId].status = 'connected'; // Update status ke 'connected'
           }
 
           if (connection === 'close') {
-              console.log(`Device ${deviceId} disconnected`);
-              devices[deviceId].status = 'disconnected'; // Update status ke 'disconnected'
-
-              if (lastDisconnect?.error) {
-                  const statusCode = lastDisconnect.error.output?.statusCode;
-                  console.error(`Connection Failure: ${lastDisconnect.error}`);
-
-                  if (statusCode === 401) {
-                      console.log(`Session expired for device ${deviceId}. Deleting session...`);
-                      deleteSession(deviceId);
-                  } else {
-                      console.log(`Reconnecting device ${deviceId} in 5 seconds...`);
-                      setTimeout(() => connectDevice(deviceId), 5000);
-                  }
-              }
-              delete devices[deviceId];
-          }
+            console.log(`Device ${deviceId} disconnected`);
+            devices[deviceId].status = 'disconnected';
+            devices[deviceId].isConnected = false; // Tandai koneksi mati
+        
+            if (devices[deviceId]?.sock) {
+                devices[deviceId].sock.end();
+            }
+        
+            if (lastDisconnect?.error) {
+                const statusCode = lastDisconnect.error.output?.statusCode;
+                console.error(`Connection Failure: ${lastDisconnect.error}`);
+        
+                if (statusCode === 401) {
+                    console.log(`Session expired for device ${deviceId}. Deleting session...`);
+                    deleteSession(deviceId);
+                } else {
+                    console.log(`Reconnecting device ${deviceId} in 5 seconds...`);
+                    setTimeout(() => connectDevice(deviceId), 5000);
+                }
+            }
+        
+            delete devices[deviceId];
+        }
+        
       });
 
       return sock;
@@ -185,19 +193,19 @@ app.get('/qr/:deviceId', async (req, res) => {
 
 // Send a message
 app.post('/send-message/:deviceId', async (req, res) => {
-  const { deviceId } = req.params;
-  const { number, message } = req.body;
+    const { deviceId } = req.params;
+    const { number, message } = req.body;
 
-  if (!devices[deviceId]) {
-    return res.status(400).send({ error: 'Device not connected' });
-  }
+    if (!devices[deviceId]?.sock || !devices[deviceId].isConnected) {
+        return res.status(400).send({ error: 'Device not connected' });
+    }
 
-  try {
-    await devices[deviceId].sendMessage(`${number}@s.whatsapp.net`, { text: message });
-    res.send({ success: true, message: 'Message sent successfully' });
-  } catch (error) {
-    res.status(500).send({ error: 'Failed to send message', details: error.message });
-  }
+    try {
+        await devices[deviceId].sock.sendMessage(`${number}@s.whatsapp.net`, { text: message });
+        res.send({ success: true, message: 'Message sent successfully' });
+    } catch (error) {
+        res.status(500).send({ error: 'Failed to send message', details: error.message });
+    }
 });
 
 app.get('/list-chats/:deviceId', async (req, res) => {
@@ -226,69 +234,53 @@ app.get('/devices', (req, res) => {
 });
 
 
-
-
 // Reconnect endpoint
 app.get('/reconnect/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
 
-  if (devices[deviceId]) {
-    devices[deviceId].end();
-    delete devices[deviceId];
+  if (devices[deviceId]?.sock) {
+      devices[deviceId].sock.end();
   }
 
+  delete devices[deviceId];
+
+  console.log(`Reconnecting device ${deviceId}...`);
   await connectDevice(deviceId);
-  res.send({ message: `Reconnecting device ${deviceId}...` });
+
+  res.send({ message: `Device ${deviceId} reconnected` });
 });
+
 
 // Send a message with button and image
 app.post('/send-button-image/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
   const { number, message, imageUrl, buttons, footer } = req.body;
 
-  if (!devices[deviceId]) {
-    return res.status(400).send({ error: 'Device not connected' });
+  if (!devices[deviceId]?.isConnected) {
+      return res.status(400).send({ error: 'Device not connected' });
   }
 
   try {
-    const formattedButtons = buttons.map((btn) => {
-      if (btn.type === 'reply') {
-        return {
-          index: btn.index,
-          quickReplyButton: {
-            displayText: btn.displayText,
-            id: btn.id,
-          },
-        };
-      } else if (btn.type === 'url') {
-        return {
-          index: btn.index,
-          urlButton: {
-            displayText: btn.displayText,
-            url: btn.url,
-          },
-        };
-      } else if (btn.type === 'call') {
-        return {
-          index: btn.index,
-          callButton: {
-            displayText: btn.displayText,
-            phoneNumber: btn.phoneNumber,
-          },
-        };
-      }
-    });
+      const formattedButtons = buttons.map((btn) => {
+          if (btn.type === 'reply') {
+              return { index: btn.index, quickReplyButton: { displayText: btn.displayText, id: btn.id } };
+          } else if (btn.type === 'url') {
+              return { index: btn.index, urlButton: { displayText: btn.displayText, url: btn.url } };
+          } else if (btn.type === 'call') {
+              return { index: btn.index, callButton: { displayText: btn.displayText, phoneNumber: btn.phoneNumber } };
+          }
+      });
 
-    await devices[deviceId].sendMessage(`${number}@s.whatsapp.net`, {
-      image: { url: imageUrl },
-      caption: message,
-      footer: footer || '',
-      templateButtons: formattedButtons,
-    });
+      await devices[deviceId].sock.sendMessage(`${number}@s.whatsapp.net`, {
+          image: { url: imageUrl },
+          caption: message,
+          footer: footer || '',
+          templateButtons: formattedButtons,
+      });
 
-    res.send({ success: true, message: 'Message with image and buttons sent successfully' });
+      res.send({ success: true, message: 'Message with image and buttons sent successfully' });
   } catch (error) {
-    res.status(500).send({ error: 'Failed to send message', details: error.message });
+      res.status(500).send({ error: 'Failed to send message', details: error.message });
   }
 });
 
@@ -384,31 +376,55 @@ app.get('/getall/chat/:deviceId', async (req, res) => {
 });
 
 
-// disconnect
-app.get('/disconnect/:deviceId', async (req, res) => {
+app.get("/disconnect/:deviceId", async (req, res) => {
   const { deviceId } = req.params;
 
-  if (devices[deviceId]) {
-      devices[deviceId].end();
-      delete devices[deviceId];
+  console.log(`Attempting to disconnect device: ${deviceId}`);
+  console.log("Available devices:", Object.keys(devices));
 
-      const sessionPath = path.join(__dirname, 'auth', deviceId);
+  const device = devices[deviceId];
 
-      if (fs.existsSync(sessionPath)) {
-          try {
-              fs.rmSync(sessionPath, { recursive: true, force: true });
-              console.log(`Session folder ${sessionPath} deleted`);
-              res.send({ success: true, message: `Device ${deviceId} disconnected and session deleted` });
-          } catch (err) {
-              console.error('Error deleting session folder:', err);
-              res.status(500).send({ error: 'Failed to delete session folder', details: err.message });
-          }
-      } else {
-          res.send({ success: true, message: `Device ${deviceId} disconnected, but session folder not found` });
+  if (device && device.sock) {
+    try {
+      console.log(`WebSocket state: ${device.sock.ws?.readyState}`);
+
+      if (device.sock.ws?.readyState === 1) {
+        await forceLogout(device); // Paksa logout
       }
+
+      console.log(`Deleting session for device ${deviceId}...`);
+      deleteSession(deviceId); // Bersihin folder sesi
+
+      delete devices[deviceId]; // Hapus dari memori
+      console.log(`Device ${deviceId} successfully logged out and disconnected`);
+
+      res.send({ success: true, message: `Device ${deviceId} logged out and disconnected successfully` });
+    } catch (error) {
+      console.error(`Error logging out device ${deviceId}:`, error);
+      res.status(500).send({ error: `Failed to log out device ${deviceId}` });
+    }
   } else {
-      res.status(400).send({ error: 'Device not connected' });
+    console.error(`Device ${deviceId} not found or socket not initialized`);
+    res.status(400).send({ error: `Device ${deviceId} not found or not connected` });
   }
+});
+
+
+// Endpoint untuk mengecek status perangkat
+app.get('/devices/:deviceId', (req, res) => {
+    const { deviceId } = req.params;
+    const device = devices[deviceId];
+
+    if (device) {
+        res.send({
+            deviceId,
+            status: device.status,
+            isConnected: device.isConnected,
+            qrCode: qrCodes[deviceId] || null,
+        });
+    } else {
+        res.status(404).send({ error: 'Device not found' });
+    }
 });
 
 
