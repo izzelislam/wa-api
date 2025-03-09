@@ -210,8 +210,19 @@ app.get('/list-chats/:deviceId', async (req, res) => {
 
 // List connected devices
 app.get('/devices', (req, res) => {
-  res.send({ connectedDevices: Object.keys(devices) });
+  const connectedDevices = Object.keys(devices).map((deviceId) => {
+      const isConnected = devices[deviceId]?.ws?.readyState === 1;
+      const qrAvailable = qrCodes[deviceId] ? true : false;
+
+      return {
+          deviceId,
+          status: isConnected ? 'connected' : (qrAvailable ? 'waiting_for_scan' : 'disconnected')
+      };
+  });
+
+  res.send({ connectedDevices });
 });
+
 
 // Reconnect endpoint
 app.get('/reconnect/:deviceId', async (req, res) => {
