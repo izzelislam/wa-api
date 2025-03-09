@@ -15,24 +15,24 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 
 // Middleware whitelist IP
-const whitelistMiddleware = (req, res, next) => {
-  const allowedIps = process.env.ALLOWED_IPS ? process.env.ALLOWED_IPS.split(',') : [];
-  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+// const whitelistMiddleware = (req, res, next) => {
+//   const allowedIps = process.env.ALLOWED_IPS ? process.env.ALLOWED_IPS.split(',') : [];
+//   const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
-  if (allowedIps.includes(clientIp)) {
-    console.log(`IP ${clientIp} diizinkan mengakses`);
-    next();
-  } else {
-    console.log(`IP ${clientIp} ditolak aksesnya`);
-    res.status(403).send({ 
-      error: 'Forbidden: IP not allowed',
-      ip: clientIp
-    });
-  }
-};
+//   if (allowedIps.includes(clientIp)) {
+//     console.log(`IP ${clientIp} diizinkan mengakses`);
+//     next();
+//   } else {
+//     console.log(`IP ${clientIp} ditolak aksesnya`);
+//     res.status(403).send({ 
+//       error: 'Forbidden: IP not allowed',
+//       ip: clientIp
+//     });
+//   }
+// };
 
 
-app.use(whitelistMiddleware);
+// app.use(whitelistMiddleware);
 
 // const db = mysql.createPool({
 //     connectionLimit: 10,
@@ -123,33 +123,45 @@ autoReconnectDevices();
 
 // Generate QR code for a specific device
 app.get('/qr/:deviceId', async (req, res) => {
-    const { deviceId } = req.params;
+  const { deviceId } = req.params;
 
-    if (devices[deviceId]?.ws?.readyState === 1) {
-        return res.status(400).send({ error: 'Device already connected' });
-    }
+  // Cek apakah device sudah terhubung
+  if (devices[deviceId]?.ws?.readyState === 1) {
+      return res.status(400).send({ error: 'Device already connected' });
+  }
 
-    try {
-        if (!devices[deviceId]) {
-        await connectDevice(deviceId);
-        }
+  try {
+      if (!devices[deviceId]) {
+          await connectDevice(deviceId);
+      }
 
-        if (qrCodes[deviceId]) {
-        QRCode.toDataURL(qrCodes[deviceId], (err, url) => {
-            if (err) {
-            res.status(500).send('Error generating QR code');
-            } else {
-            res.send({ deviceId, qrCode: url });
-            }
-        });
-        } else {
-        res.status(404).send({ error: 'QR not available or already connected' });
-        }
-    } catch (error) {
-        console.error('Failed to initialize device:', error);
-        res.status(500).send({ error: 'Failed to initialize device', details: error.message });
-    }
+      let attempts = 0;
+      const maxAttempts = 10;
+
+      // Polling untuk tunggu QR muncul
+      const checkQR = setInterval(() => {
+          if (qrCodes[deviceId]) {
+              clearInterval(checkQR);
+              QRCode.toDataURL(qrCodes[deviceId], (err, url) => {
+                  if (err) {
+                      res.status(500).send({ error: 'Error generating QR code' });
+                  } else {
+                      res.send({ deviceId, qrCode: url });
+                  }
+              });
+          } else if (attempts >= maxAttempts) {
+              clearInterval(checkQR);
+              res.status(404).send({ error: 'QR not available or connection failed' });
+          }
+          attempts++;
+      }, 1000); // Cek tiap 1 detik, timeout 10 detik
+
+  } catch (error) {
+      console.error('Failed to initialize device:', error);
+      res.status(500).send({ error: 'Failed to initialize device', details: error.message });
+  }
 });
+
 
 // Send a message
 app.post('/send-message/:deviceId', async (req, res) => {
