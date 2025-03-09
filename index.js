@@ -211,17 +211,28 @@ app.get('/list-chats/:deviceId', async (req, res) => {
 // List connected devices
 app.get('/devices', (req, res) => {
   const connectedDevices = Object.keys(devices).map((deviceId) => {
-      const isConnected = devices[deviceId]?.ws?.readyState === 1;
+      const device = devices[deviceId];
       const qrAvailable = qrCodes[deviceId] ? true : false;
+      
+      let status = 'disconnected';
+      
+      if (device) {
+          if (device?.ws?.readyState === 1) {
+              status = 'connected';
+          } else if (qrAvailable) {
+              status = 'waiting_for_scan';
+          }
+      }
 
       return {
           deviceId,
-          status: isConnected ? 'connected' : (qrAvailable ? 'waiting_for_scan' : 'disconnected')
+          status
       };
   });
 
   res.send({ connectedDevices });
 });
+
 
 
 // Reconnect endpoint
