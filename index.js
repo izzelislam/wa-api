@@ -83,7 +83,7 @@ async function connectDevice(deviceId) {
       const { state, saveCreds } = await useMultiFileAuthState(authFolder);
       const sock = makeWASocket({ auth: state });
 
-      devices[deviceId] = sock;
+      devices[deviceId] = { sock, status: 'connecting' }; // Tambahkan status awal
 
       sock.ev.on('creds.update', saveCreds);
 
@@ -92,15 +92,19 @@ async function connectDevice(deviceId) {
 
           if (qr) {
               qrCodes[deviceId] = qr;
+              devices[deviceId].status = 'waiting_for_scan';
           }
 
           if (connection === 'open') {
               console.log(`Device ${deviceId} connected`);
               delete qrCodes[deviceId];
+              devices[deviceId].status = 'connected'; // Update status ke 'connected'
           }
 
           if (connection === 'close') {
               console.log(`Device ${deviceId} disconnected`);
+              devices[deviceId].status = 'disconnected'; // Update status ke 'disconnected'
+
               if (lastDisconnect?.error) {
                   const statusCode = lastDisconnect.error.output?.statusCode;
                   console.error(`Connection Failure: ${lastDisconnect.error}`);
@@ -123,6 +127,7 @@ async function connectDevice(deviceId) {
       return null;
   }
 }
+
 
 // Auto-reconnect on server restart
 function autoReconnectDevices() {
@@ -211,27 +216,15 @@ app.get('/list-chats/:deviceId', async (req, res) => {
 // List connected devices
 app.get('/devices', (req, res) => {
   const connectedDevices = Object.keys(devices).map((deviceId) => {
-      const device = devices[deviceId];
-      const qrAvailable = qrCodes[deviceId] ? true : false;
-      
-      let status = 'disconnected';
-      
-      if (device) {
-          if (device?.ws?.readyState === 1) {
-              status = 'connected';
-          } else if (qrAvailable) {
-              status = 'waiting_for_scan';
-          }
-      }
-
       return {
           deviceId,
-          status
+          status: devices[deviceId]?.status || 'disconnected'
       };
   });
 
   res.send({ connectedDevices });
 });
+
 
 
 
