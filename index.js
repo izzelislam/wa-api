@@ -1,13 +1,20 @@
 // whatsapp-gateway.js
-const express = require('express');
-const { Boom } = require('@hapi/boom');
-const makeWASocket = require('@whiskeysockets/baileys').default;
-const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const mysql = require('mysql2');
-const QRCode = require('qrcode');
-const fs = require('fs');
-const path = require('path');
-require('dotenv').config();
+import express from 'express';
+import { Boom } from '@hapi/boom';
+import makeWASocket from '@whiskeysockets/baileys';
+import { useMultiFileAuthState } from '@whiskeysockets/baileys';
+import mysql from 'mysql2';
+import QRCode from 'qrcode';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+// ES Modules equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -31,7 +38,6 @@ const whitelistMiddleware = (req, res, next) => {
   }
 };
 
-
 app.use(whitelistMiddleware);
 
 // const db = mysql.createPool({
@@ -49,7 +55,7 @@ app.use(whitelistMiddleware);
 //     }
 //     console.log('Connected to MySQL database');
 //     connection.release();
-// });
+//     });
 
 // db.on('error', (err) => {
 //     console.error('MySQL error:', err.message);
@@ -57,7 +63,6 @@ app.use(whitelistMiddleware);
 
 let devices = {};
 let qrCodes = {};
-
 
 function deleteSession(deviceId) {
   const sessionPath = path.join(__dirname, 'auth', deviceId);
@@ -126,7 +131,6 @@ async function connectDevice(deviceId) {
         
             delete devices[deviceId];
         }
-        
       });
 
       return sock;
@@ -135,7 +139,6 @@ async function connectDevice(deviceId) {
       return null;
   }
 }
-
 
 // Auto-reconnect on server restart
 function autoReconnectDevices() {
@@ -190,7 +193,6 @@ app.get('/qr/:deviceId', async (req, res) => {
   }
 });
 
-
 // Send a message
 app.post('/send-message/:deviceId', async (req, res) => {
     const { deviceId } = req.params;
@@ -233,7 +235,6 @@ app.get('/devices', (req, res) => {
   res.send({ connectedDevices });
 });
 
-
 // Reconnect endpoint
 app.get('/reconnect/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
@@ -249,7 +250,6 @@ app.get('/reconnect/:deviceId', async (req, res) => {
 
   res.send({ message: `Device ${deviceId} reconnected` });
 });
-
 
 // Send a message with button and image
 app.post('/send-button-image/:deviceId', async (req, res) => {
@@ -360,8 +360,6 @@ app.get('/list-groups/:deviceId', async (req, res) => {
   }
 });
 
-
-
 app.get('/getall/chat/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
 
@@ -375,6 +373,14 @@ app.get('/getall/chat/:deviceId', async (req, res) => {
   }
 });
 
+// Fungsi forceLogout yang hilang dalam kode asli
+async function forceLogout(device) {
+  try {
+    await device.sock.logout();
+  } catch (error) {
+    console.error('Error during force logout:', error);
+  }
+}
 
 app.get("/disconnect/:deviceId", async (req, res) => {
   const { deviceId } = req.params;
@@ -409,7 +415,6 @@ app.get("/disconnect/:deviceId", async (req, res) => {
   }
 });
 
-
 // Endpoint untuk mengecek status perangkat
 app.get('/devices/:deviceId', (req, res) => {
     const { deviceId } = req.params;
@@ -426,7 +431,6 @@ app.get('/devices/:deviceId', (req, res) => {
         res.status(404).send({ error: 'Device not found' });
     }
 });
-
 
 app.listen(port, () => {
   console.log(`WhatsApp Gateway listening on port ${port}`);
